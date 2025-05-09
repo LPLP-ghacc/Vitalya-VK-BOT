@@ -1,11 +1,10 @@
 ﻿using System.Text;
-using Newtonsoft.Json;
 using vkbot_vitalya.Config;
 using vkbot_vitalya.Core;
 using vkbot_vitalya.Core.Saver;
+using vkbot_vitalya.Services;
 using VkNet.Exception;
 using VkNet.Model;
-
 
 namespace vkbot_vitalya;
 /* todo
@@ -58,9 +57,9 @@ public static class Program {
         }
 
         _shutdownEvent.WaitOne();
-        L.I("Saving tags cache");
-        var text = JsonConvert.SerializeObject(_handler.ServiceEndpoint.DanbooruApi.TagsCache);
-        File.WriteAllText("tags_cache.json", text);
+        L.I("Saving cache...");
+        DanbooruApi.SaveCache();
+        SafebooruApi.SaveCache();
         L.I($"Bot stopped at {DateTime.Now}");
     }
 

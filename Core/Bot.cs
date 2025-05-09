@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using vkbot_vitalya.Config;
 using vkbot_vitalya.Core;
@@ -52,8 +51,6 @@ public class Bot {
 
     /// Upload new image to VK
     public async Task<Photo?> UploadImage(Image image) {
-        var sw = new Stopwatch();
-        sw.Start();
         var uploadUrl = Api.Photo.GetMessagesUploadServer((long)Auth.Instance.GroupId).UploadUrl;
         using var memoryStream = new MemoryStream();
         await image.SaveAsync(memoryStream, new JpegEncoder());
@@ -74,15 +71,12 @@ public class Bot {
 
         var responseString = await response.Content.ReadAsStringAsync();
         var photo = Api.Photo.SaveMessagesPhoto(responseString)[0];
-        sw.Stop();
-        L.I($"Photo uploaded to VK in {sw.ElapsedMilliseconds} ms");
+        L.I($"Photo uploaded to VK");
         return photo;
     }
 
     /// Asynchronously upload image from URL
     public async Task<Photo?> UploadImageFrom(string imageUrl, HttpClient client) {
-        var sw = new Stopwatch();
-        sw.Start();
         var uploadUrl = Api.Photo.GetMessagesUploadServer((long)Auth.Instance.GroupId).UploadUrl;
 
         try {
@@ -110,8 +104,7 @@ public class Bot {
 
             var responseString = await vkResponse.Content.ReadAsStringAsync();
             var photo = Api.Photo.SaveMessagesPhoto(responseString)[0];
-            sw.Stop();
-            L.I($"Photo copied to VK in {sw.ElapsedMilliseconds} ms");
+            L.I("Photo copied to VK");
             return photo;
         } catch (Exception e) {
             L.E($"Failed to upload image from {imageUrl}", e);
@@ -121,8 +114,6 @@ public class Bot {
     
     /// Asynchronously upload gif from URL
     public async Task<MediaAttachment?> UploadGifFrom(string gifUrl, long peerId, HttpClient client) {
-        var sw = new Stopwatch();
-        sw.Start();
         var uploadUrl = Api.Docs.GetMessagesUploadServer(peerId).UploadUrl;
 
         try {
@@ -147,10 +138,9 @@ public class Bot {
             }
 
             var responseString = await vkResponse.Content.ReadAsStringAsync();
-            var gif = Api.Docs.Save(responseString, gifUrl.Split(['\\', '/'])[^1])[0];
-            sw.Stop();
-            L.I($"Gif copied to VK in {sw.ElapsedMilliseconds} ms");
-            return gif.Instance;
+            var gif = Api.Docs.Save(responseString, gifUrl.Split('\\', '/')[^1])[0].Instance;
+            L.I($"Gif copied to VK");
+            return gif;
         } catch (Exception e) {
             L.E($"Failed to upload gif from {gifUrl}", e);
             return null;

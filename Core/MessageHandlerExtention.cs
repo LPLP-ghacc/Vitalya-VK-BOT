@@ -1,16 +1,18 @@
-﻿using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+﻿using System.Diagnostics;
 using System.Text;
-using vkbot_vitalya.Config;
-using vkbot_vitalya.Services;
-using VkNet.Model;
-using vkbot_vitalya.Services.Generators.TextGeneration;
-using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using vkbot_vitalya.Config;
 using vkbot_vitalya.Core;
+using vkbot_vitalya.Services;
 using vkbot_vitalya.Services.Generators;
+using vkbot_vitalya.Services.Generators.TextGeneration;
+using VkNet.Enums.StringEnums;
+using VkNet.Exception;
+using VkNet.Model;
 using Image = SixLabors.ImageSharp.Image;
 
 namespace vkbot_vitalya;
@@ -30,12 +32,8 @@ public partial class MessageHandler {
 
         try {
             Image<Rgba32> processedImage;
-            var sw = new Stopwatch();
             try {
-                sw.Start();
                 processedImage = imageProcessor(originalImage);
-                sw.Stop();
-                L.I($"Image processing took {sw.ElapsedMilliseconds} ms");
             } catch (Exception e) {
                 L.E($"Error processing image: {e.Message}");
                 return;
@@ -120,112 +118,146 @@ public partial class MessageHandler {
     }
 
     private async Task HandleAnimeCommand(Message message, string alias, string tags) {
-
         L.I($"Requesting Safebooru with tags: {tags}");
 
-        var randomPost = await ServiceEndpoint.SafebooruApi.GetRandomPostAsync(tags);
+        var (post, err) = await ServiceEndpoint.SafebooruApi.RandomPostAsync(tags);
 
-        if (randomPost != null) {
-            var imageUrl = randomPost.FileUrl;
-            L.I($"Found image URL: {imageUrl}");
-
-            try {
-                var photo = await _bot.UploadImageFrom(imageUrl, ServiceEndpoint.SafebooruApi.Client);
-                if (photo == null) return;
-
-                List<string> variableLabel = [
-                    "Еще!",
-                    "Ещ...е.. а.",
-                    "Ах!! !!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "Еще!",
-                    "ещо"
-                ];
-
-
-                var b = new MessageKeyboardButton {
-                    Action = new MessageKeyboardButtonAction {
-                        Type = VkNet.Enums.StringEnums.KeyboardButtonActionType.Text,
-                        Label = variableLabel[Rand.Next(variableLabel.Count)],
-                        Payload = JsonConvert.SerializeObject(new { command = "anim", _tags = tags })
-                    }
-                };
-
-                List<MessageKeyboardButton> buttonsRow1 = [b];
-
-                var values = new List<List<MessageKeyboardButton>> { buttonsRow1 };
-
-                var keyboard = new MessageKeyboard {
-                    Buttons = values,
-                    Inline = true
-                };
-
-                _bot.Api.Messages.Send(new MessagesSendParams {
-                    RandomId = Rand.Next(),
-                    PeerId = message.PeerId,
-                    Attachments = [photo],
-                    ReplyTo = message.Id,
-                    Keyboard = keyboard
-                });
-
-                L.I("Anime image sent to user.");
-            } catch (Exception ex) {
-                L.I($"Exception in HandleAnimeCommand: {ex.Message}");
-                L.I($"Stack Trace: {ex.StackTrace}");
-            }
-        } else {
+        if (post == null) {
             L.I("No anime image found.");
-            Answer(message, "Извините, не удалось найти изображение аниме.");
+            Answer(message, err + ".");
+            return;
+        }
+
+        var mediaUrl = post.FileUrl;
+        L.I($"Found media URL: {mediaUrl}");
+
+        try {
+            MediaAttachment? attch;
+            var mediaType = mediaUrl.Split('.')[^1] == "gif" ? "doc" : "photo";
+            if (SafebooruApi.MediaCache.TryGetValue(post.Id, out var cache)) {
+                /* Отправка медиа из сохр */
+                attch = mediaType == "photo" ? new Photo() : new Document();
+                attch.OwnerId = cache.VkOwnerId;
+                attch.Id = cache.VkMediaId;
+                attch.AccessKey = cache.VkAccessKey;
+            } else {
+                /* Загрузка медиа в вк */
+                attch = mediaType == "photo"
+                    ? await _bot.UploadImageFrom(mediaUrl, ServiceEndpoint.SafebooruApi.HttpClient)
+                    : await _bot.UploadGifFrom(mediaUrl, message.PeerId, ServiceEndpoint.SafebooruApi.HttpClient);
+                if (attch == null) return;
+                string vkMediaUrl;
+                vkMediaUrl = attch is Photo photo
+                    ? photo.Sizes.OrderByDescending(size => size.Height).First().Url.AbsoluteUri
+                    : (attch as Document)!.Uri;
+                /* Один пост может грузиться дважды, если посты зациклились быстрее чем загрузились */
+                SafebooruApi.MediaCache.TryAdd(post.Id,
+                    new(attch.OwnerId!.Value, attch.Id!.Value, attch.AccessKey, vkMediaUrl, ""));
+            }
+
+            List<string> variableLabel = [
+                "Еще!",
+                "Ещ...е.. а.",
+                "Ах!! !!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "Еще!",
+                "ещо"
+            ];
+            
+            var b = new MessageKeyboardButton {
+                Action = new MessageKeyboardButtonAction {
+                    Type = KeyboardButtonActionType.Text,
+                    Label = variableLabel[Rand.Next(variableLabel.Count)],
+                    Payload = JsonConvert.SerializeObject(new { command = "anim", _tags = tags })
+                }
+            };
+
+            List<MessageKeyboardButton> buttonsRow1 = [b];
+
+            var values = new List<List<MessageKeyboardButton>> { buttonsRow1 };
+
+            var keyboard = new MessageKeyboard {
+                Buttons = values,
+                Inline = true
+            };
+
+            _bot.Api.Messages.Send(new MessagesSendParams {
+                RandomId = Rand.Next(),
+                PeerId = message.PeerId,
+                Attachments = [attch],
+                ReplyTo = message.Id,
+                Keyboard = keyboard
+            });
+
+            L.I("Anime image sent to user.");
+        } catch (Exception e) {
+            L.E($"Exception in HandleAnimeCommand", e);
         }
     }
 
     private async Task HandleHCommand(Message message, string alias, string tags) {
         L.I($"Requesting Danbooru with tags: {tags}");
 
-
-        string? imageUrl, err;
+        string? mediaUrl, err;
+        DanbooruPost? post;
         try {
-            (imageUrl, err) = await ServiceEndpoint.DanbooruApi.RandomImageAsync(tags);
+            (post, err) = await ServiceEndpoint.DanbooruApi.RandomPostAsync(tags);
         } catch (Exception e) {
             L.E("Failed to find XXX", e);
             Answer(message, "Что-то пошло не так, попробуйте позже");
             return;
         }
 
-        if (imageUrl == null) {
+        if (post == null) {
             L.I("No anime image found.");
             Answer(message, err + ".");
             return;
         }
 
-        L.I($"Found image URL: {imageUrl}");
+        mediaUrl = post.FileUrl!;
+
+        L.I($"Found image URL: {mediaUrl}");
 
         try {
-            MediaAttachment? attachment;
-            if (imageUrl.Split('.')[^1] != "gif") 
-                attachment = await _bot.UploadImageFrom(imageUrl, ServiceEndpoint.DanbooruApi.Client);
-            else 
-                attachment = await _bot.UploadGifFrom(imageUrl, message.PeerId, ServiceEndpoint.DanbooruApi.Client);
-            
-            if (attachment == null)
-                return;
+            MediaAttachment? attch;
+            var mediaType = mediaUrl.Split('.')[^1] == "gif" ? "doc" : "photo";
+            if (DanbooruApi.MediaCache.TryGetValue(post.Id, out var cache)) {
+                /* Отправка медиа из сохр */
+                attch = mediaType == "photo" ? new Photo() : new Document();
+                attch.OwnerId = cache.VkOwnerId;
+                attch.Id = cache.VkMediaId;
+                attch.AccessKey = cache.VkAccessKey;
+            } else {
+                /* Загрузка медиа в вк */
+                attch = mediaType == "photo"
+                    ? await _bot.UploadImageFrom(mediaUrl, ServiceEndpoint.DanbooruApi.HttpClient)
+                    : await _bot.UploadGifFrom(mediaUrl, message.PeerId, ServiceEndpoint.DanbooruApi.HttpClient);
+                if (attch == null) return;
+                string vkMediaUrl;
+                vkMediaUrl = attch is Photo photo
+                    ? photo.Sizes.OrderByDescending(size => size.Height).First().Url.AbsoluteUri
+                    : (attch as Document)!.Uri;
+                /* Один пост может грузиться дважды, если посты зациклились быстрее чем загрузились */
+                DanbooruApi.MediaCache.TryAdd(post.Id,
+                    new(attch.OwnerId!.Value, attch.Id!.Value, attch.AccessKey, vkMediaUrl, ""));
+            }
             
             var b = new MessageKeyboardButton {
                 Action = new MessageKeyboardButtonAction {
-                    Type = VkNet.Enums.StringEnums.KeyboardButtonActionType.Text,
+                    Type = KeyboardButtonActionType.Text,
                     Label = "Еще!",
                     Payload = JsonConvert.SerializeObject(new { command = "hen", _tags = tags })
                 }
@@ -243,7 +275,7 @@ public partial class MessageHandler {
             _bot.Api.Messages.Send(new MessagesSendParams {
                 RandomId = Rand.Next(),
                 PeerId = message.PeerId,
-                Attachments = [attachment],
+                Attachments = [attch],
                 ReplyTo = message.Id,
                 Keyboard = keyboard
             });
@@ -255,7 +287,7 @@ public partial class MessageHandler {
     }
 
     private async Task HandleHelpCommand(Message message, string alias, string args) {
-        var help = File.ReadAllText("./config.json");
+        var help = Regex.Replace(File.ReadAllText("./config.json"), @"[\{\}""]", "");
 
         await _bot.Api.Messages.SendAsync(new MessagesSendParams {
             RandomId = Rand.Next(),
@@ -446,14 +478,14 @@ public partial class MessageHandler {
             var buttons = new List<MessageKeyboardButton> {
                 new MessageKeyboardButton {
                     Action = new MessageKeyboardButtonAction {
-                        Type = VkNet.Enums.StringEnums.KeyboardButtonActionType.Text,
+                        Type = KeyboardButtonActionType.Text,
                         Label = "Выполнено",
                         Payload = JsonConvert.SerializeObject(new { command = "chaos_done", victim = victim.Id })
                     }
                 },
                 new MessageKeyboardButton {
                     Action = new MessageKeyboardButtonAction {
-                        Type = VkNet.Enums.StringEnums.KeyboardButtonActionType.Text,
+                        Type = KeyboardButtonActionType.Text,
                         Label = "Провал",
                         Payload = JsonConvert.SerializeObject(new { command = "chaos_fail", victim = victim.Id })
                     }
@@ -568,7 +600,7 @@ public partial class MessageHandler {
     private MessageKeyboardButton CreateToggleButton(bool isEnabled, string command, string label) {
         return new MessageKeyboardButton {
             Action = new MessageKeyboardButtonAction {
-                Type = VkNet.Enums.StringEnums.KeyboardButtonActionType.Text,
+                Type = KeyboardButtonActionType.Text,
                 Label = isEnabled ? $"✅ {label}" : $"🚫 {label}",
                 Payload = JsonConvert.SerializeObject(new { command = $"toggle_{command}" })
             }
@@ -581,7 +613,7 @@ public partial class MessageHandler {
 
             var admins = members.Items.Where(x => x.IsAdmin).Select(x => x.MemberId);
             return admins.Contains(userId);
-        } catch (VkNet.Exception.ConversationAccessDeniedException ex) {
+        } catch (ConversationAccessDeniedException ex) {
             L.I($"Access denied to chat {chatId}: {ex.Message}");
             return false;
         }
